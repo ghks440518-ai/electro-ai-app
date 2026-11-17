@@ -48,7 +48,6 @@ max_w = "960px" if (st.session_state.user and st.session_state.view_mode == "adm
 
 st.markdown(f"""
 <style>
-/* 상단 기본 Streamlit 헤더 제거로 위쪽 UI 잘림 완벽 방지 */
 header[data-testid="stHeader"] {{
     display: none !important;
 }}
@@ -79,9 +78,6 @@ div[data-testid="stMainBlockContainer"], .block-container {{
 </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# 상단 바 (파란 타이틀 배너 제거, 옵션 톱니바퀴만 깔끔하게 우측 배치)
-# ==========================================
 top_l, top_r = st.columns([2.6, 1.4])
 with top_l:
     if st.session_state.user is not None:
@@ -111,9 +107,6 @@ with top_r:
             ok, msg = create_inquiry(uid, inq_name, inq_contact, inq_title, inq_msg)
             st.success(msg) if ok else st.error(msg)
 
-# ==========================================
-# 0번: 로그인 / 회원가입 / ID찾기 / PW재설정
-# ==========================================
 if st.session_state.user is None:
     ap = st.session_state.auth_page
 
@@ -262,9 +255,6 @@ if st.session_state.user is None:
 
     st.stop()
 
-# ==========================================
-# 로그인 완료 후: 관리자 전환 / 로그아웃 바
-# ==========================================
 user = st.session_state.user
 if user["role"] == "admin":
     ac1, ac2 = st.columns(2)
@@ -318,4 +308,150 @@ st.progress(st.session_state.step / 5)
 
 if st.session_state.step == 1:
     st.subheader(f"1️⃣ {t('step1', lang)}")
-    enhan
+    enhance_p = st.checkbox("✨ 종이 평면도 스캔 선명화 보정", value=False)
+    cam_on = st.toggle("📱 스마트폰 카메라로 종이 평면도 촬영", value=False)
+    f_up = st.camera_input("종이 평면도 촬영") if cam_on else st.file_uploader("평면도 이미지 업로드 (JPG/PNG)", type=["jpg", "jpeg", "png"])
+    if f_up is not None:
+        st.session_state.floor_img = prepare_image(f_up, enhance_paper=enhance_p, auto_crop=True)
+    if st.button("🖼️ 샘플 아파트 평면도로 테스트하기", width="stretch"):
+        st.session_state.floor_img = create_sample_floorplan()
+    if st.session_state.floor_img is not None:
+        st.image(st.session_state.floor_img, caption="업로드된 2D 집 평면도", width="stretch")
+    if st.button("다음: 설계 요소 & 자재가격 ➡️", type="primary", width="stretch", disabled=(st.session_state.floor_img is None)):
+        st.session_state.step = 2
+        st.rerun()
+
+elif st.session_state.step == 2:
+    st.subheader(f"2️⃣ {t('step2', lang)}")
+    search_q = st.text_input(t("search_el", lang), placeholder="예: 콘센트, 전등, TV, 인덕션, 비데, 스위치...")
+    matched_keys = search_elements(search_q)
+    if not matched_keys:
+        st.warning("검색 결과가 없습니다.")
+    else:
+        c_s1, c_s2, c_s3 = st.columns([2.2, 1.3, 1.1])
+        pick_k = c_s1.selectbox("설계 요소", options=matched_keys, format_func=lambda k: f"{ELEMENT_DB[k]['name']} ({ELEMENT_DB[k]['power_w']}W)")
+        pick_room = c_s2.text_input("배치 공간", value="거실")
+        c_s3.write("")
+        if c_s3.button("➕ 추가", type="primary", width="stretch"):
+            st.session_state.elements.append({"element_key": pick_k, "room_hint": pick_room, "mat_price": ELEMENT_DB[pick_k]["default_mat_price"], "qty": 1})
+            st.rerun()
+
+    st.divider()
+    st.markdown(f"**📋 구성된 설계 요소 ({len(st.session_state.elements)}개) — 옆 칸에 구입 자재 가격 입력**")
+    for idx, el in enumerate(st.session_state.elements):
+        meta = ELEMENT_DB[el["element_key"]]
+        r1, r2, r3, r4, r5 = st.columns([2.0, 1.2, 1.6, 0.9, 0.8])
+        r1.write(f"**{idx+1}. {meta['name'].split()[0]}**")
+        el["room_hint"] = r2.text_input("공간", value=el["room_hint"], key=f"rm_{idx}", label_visibility="collapsed")
+        el["mat_price"] = r3.number_input("가격", min_value=0, step=1000, value=int(el["mat_price"]), key=f"mp_{idx}", label_visibility="collapsed")
+        el["qty"] = r4.number_input("수량", min_value=1, max_value=50, value=int(el["qty"]), key=f"qt_{idx}", label_visibility="collapsed")
+        if r5.button("🗑️", key=f"dl_{idx}", width="stretch"):
+            st.session_state.elements.pop(idx)
+            st.rerun()
+
+    c1, c2 = st.columns(2)
+    if c1.button("⬅️ 이전", width="stretch"):
+        st.session_state.step = 1
+        st.rerun()
+    if c2.button("다음: 인건비/인원수 ➡️", type="primary", width="stretch", disabled=(len(st.session_state.elements) == 0)):
+        st.session_state.step = 3
+        st.rerun()
+
+elif st.session_state.step == 3:
+    st.subheader(f"3️⃣ {t('step3', lang)}")
+    st.session_state.labor_per_person = st.number_input("1인당 인건비 / 일당 (원)", min_value=50000, max_value=1000000, value=int(st.session_state.labor_per_person), step=10000)
+    lc1, lc2 = st.columns(2)
+    st.session_state.worker_count = lc1.number_input("공사 총 인원수 (명)", min_value=1, max_value=30, value=int(st.session_state.worker_count), step=1)
+    st.session_state.work_days = lc2.number_input("예상 공사 일수 (일)", min_value=0.5, max_value=30.0, value=float(st.session_state.work_days), step=0.5)
+    est_labor = int(st.session_state.labor_per_person * st.session_state.worker_count * st.session_state.work_days)
+    st.info(f"👷 예상 총 인건비: **{est_labor:,} 원** ({st.session_state.labor_per_person:,}원 × {st.session_state.worker_count}명 × {st.session_state.work_days}일)")
+
+    c1, c2 = st.columns(2)
+    if c1.button("⬅️ 이전", width="stretch"):
+        st.session_state.step = 2
+        st.rerun()
+    if c2.button("다음: AI 분석 실행 ➡️", type="primary", width="stretch"):
+        st.session_state.step = 4
+        st.rerun()
+
+elif st.session_state.step == 4:
+    st.subheader(f"4️⃣ {t('step4', lang)}")
+    main_br = st.selectbox("기존 분전반 메인 차단기 용량 (A)", [30, 40, 50, 60, 75, 100], index=1)
+    loss_pct = st.slider("KEC 배선 여유 손실률 (%)", 10, 35, 20, step=5)
+
+    if st.button("⚡ AI 분석 및 도면·시공비 도출 시작", type="primary", width="stretch", disabled=(st.session_state.floor_img is None)):
+        with st.spinner("2D 배치도, 실제 시공 전기도면, KEC 시공비를 도출 중입니다..."):
+            try:
+                ana = run_ai_design_analysis(st.session_state.floor_img, st.session_state.elements, api_key) if api_key else run_demo_design_analysis(st.session_state.elements)
+                el_inputs = []
+                for idx, p in enumerate(ana.placements):
+                    src = st.session_state.elements[idx] if idx < len(st.session_state.elements) else st.session_state.elements[-1]
+                    el_inputs.append(DesignElementInput(
+                        element_key=p.element_key, room_name=p.room_name,
+                        user_mat_price=int(src["mat_price"]), quantity=int(src["qty"]), distance_m=float(p.estimated_distance_m),
+                    ))
+                cost_res = calculate_kec_and_cost(
+                    placed_elements=el_inputs,
+                    labor_per_person=int(st.session_state.labor_per_person),
+                    worker_count=int(st.session_state.worker_count),
+                    work_days=float(st.session_state.work_days),
+                    main_breaker_a=int(main_br), loss_rate=loss_pct / 100.0,
+                )
+                st.session_state.ai_res = ana
+                st.session_state.cost_res = cost_res
+                st.session_state.img_res1 = render_2d_placement_blueprint(st.session_state.floor_img, ana)
+                st.session_state.img_res2 = render_construction_electrical_diagram(st.session_state.floor_img, ana, cost_res)
+                st.session_state.step = 5
+                st.rerun()
+            except Exception as e:
+                st.error(f"분석 오류: {e}")
+
+    if st.button("⬅️ 이전", width="stretch"):
+        st.session_state.step = 3
+        st.rerun()
+
+elif st.session_state.step == 5:
+    st.subheader(f"5️⃣ {t('step5', lang)}")
+    if st.session_state.ai_res is None:
+        st.warning("4단계에서 먼저 AI 분석을 실행해 주세요.")
+        st.stop()
+
+    rt1, rt2, rt3 = st.tabs([t("res_tab1", lang), t("res_tab2", lang), t("res_tab3", lang)])
+    cr = st.session_state.cost_res
+
+    with rt1:
+        st.image(st.session_state.img_res1, width="stretch")
+        b1 = io.BytesIO()
+        st.session_state.img_res1.save(b1, format="PNG")
+        st.download_button("📥 [결과1] 2D 배치 설계도 다운로드 (PNG)", b1.getvalue(), "결과1_2D배치도.png", "image/png", width="stretch")
+
+    with rt2:
+        st.image(st.session_state.img_res2, width="stretch")
+        b2 = io.BytesIO()
+        st.session_state.img_res2.save(b2, format="PNG")
+        st.download_button("📥 [결과2] 실제 시공 전기도면 다운로드 (PNG)", b2.getvalue(), "결과2_실제시공_전기도면.png", "image/png", type="primary", width="stretch")
+
+    with rt3:
+        st.markdown(f"""
+        <div class="hero-cost">
+            <div style="font-size:0.82rem; opacity:0.85;">최종 예상 시공비 (구입 자재 + KEC 공사자재 + 인건비)</div>
+            <div class="won">{cr['final_total_cost']:,} 원</div>
+            <div style="font-size:0.78rem; opacity:0.85;">
+                구입자재 {cr['user_mat_total']:,}원 + KEC자재 {cr['kec_mat_total']:,}원 + 인건비 {cr['labor_total']:,}원
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        s_txt = f"메인 차단기 {cr['main_breaker_a']}A 기준 예상 사용률 {cr['usage_pct']}% ({cr['safety_status']})"
+        st.error(f"🚨 {s_txt}") if cr["safety_status"] == "위험" else (st.warning(f"⚠️ {s_txt}") if cr["safety_status"] == "주의" else st.success(f"🟢 {s_txt}"))
+
+        st.markdown("**① 2단계 구입 자재 내역 (사용자 입력)**")
+        st.dataframe(pd.DataFrame([{**x, "금액": f"{x['금액']:,}원"} for x in cr["user_mat_items"]]), width="stretch", hide_index=True)
+
+        st.markdown("**② KEC 기반 전기공사 필수 자재 목록 및 비용 (cf.3)**")
+        st.dataframe(pd.DataFrame([{**x, "금액": f"{x['금액']:,}원"} for x in cr["kec_mat_items"]]), width="stretch", hide_index=True)
+
+        ld = cr["labor_detail"]
+        st.markdown(f"**③ 시공 인건비:** {ld['labor_per_person']:,}원 × {ld['worker_count']}명 × {ld['work_days']}일 = **{cr['labor_total']:,}원**")
+        quote_txt = f"[KEC 최종 시공 견적서 - {datetime.now().strftime('%Y-%m-%d')}]\n구입자재: {cr['user_mat_total']:,}원\nKEC자재: {cr['kec_mat_total']:,}원\n인건비: {cr['labor_total']:,}원\n총 합계: {cr['final_total_cost']:,}원"
+        st.download_button("📥 최종 시공비 견적서 저장 (.txt)", quote_txt.encode("utf-8"), "최종시공비_견적서.txt", "text/plain", width="stretch")
