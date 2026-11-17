@@ -26,6 +26,7 @@ st.set_page_config(page_title="홈전기 KEC AI 설계·견적", page_icon="⚡"
 
 defaults = {
     "user": None, "lang": "ko", "step": 1, "view_mode": "app",
+    "auth_page": "login", "auth_flash": "", "prefill_id": "",
     "floor_img": None, "ai_res": None, "img_res1": None, "img_res2": None, "cost_res": None,
     "otp_sent": False, "otp_verified": False, "otp_demo_code": None, "otp_target": "", "otp_method": "phone",
     "elements": [
@@ -98,35 +99,62 @@ with h_col2:
             st.success(msg) if ok else st.error(msg)
 
 # ==========================================
-# 0번: 로그인 / 보안 회원가입(커스텀ID + PW정책 + 6자리인증) / ID·PW 찾기
+# 0번: 로그인 / 별도 페이지형 회원가입·ID찾기·PW재설정
 # ==========================================
 if st.session_state.user is None:
-    tab_l, tab_s, tab_fi, tab_fp = st.tabs([
-        t("login_tab", lang), t("signup_tab", lang), t("find_id_tab", lang), t("find_pw_tab", lang),
-    ])
+    ap = st.session_state.auth_page
 
-    with tab_l:
-        lid = st.text_input("아이디 (또는 전화번호 / 이메일)", placeholder="myid123 또는 01012345678")
+    # 1) 로그인 메인 화면 (회원가입 입력칸 없이 깔끔한 로그인만 표시)
+    if ap == "login":
+        st.subheader(f"🔐 {t('login_tab', lang)}")
+        if st.session_state.auth_flash:
+            st.success(st.session_state.auth_flash)
+
+        lid = st.text_input("아이디 (또는 전화번호 / 이메일)", value=st.session_state.prefill_id, placeholder="myid123 또는 01012345678")
         lpw = st.text_input(t("pw_label", lang), type="password")
+
         if st.button(t("login_tab", lang), type="primary", width="stretch"):
             ok, u_data, msg = login_user(lid, lpw)
             if ok:
                 st.session_state.user = u_data
+                st.session_state.auth_flash = ""
+                st.session_state.prefill_id = ""
                 st.session_state.view_mode = "admin" if u_data["role"] == "admin" else "app"
                 st.rerun()
             else:
                 st.error(msg)
+
+        st.divider()
+        b1, b2, b3 = st.columns(3)
+        if b1.button(t("signup_tab", lang), width="stretch"):
+            st.session_state.auth_page = "signup"
+            st.session_state.auth_flash = ""
+            st.rerun()
+        if b2.button(t("find_id_tab", lang), width="stretch"):
+            st.session_state.auth_page = "find_id"
+            st.session_state.auth_flash = ""
+            st.rerun()
+        if b3.button(t("find_pw_tab", lang), width="stretch"):
+            st.session_state.auth_page = "find_pw"
+            st.session_state.auth_flash = ""
+            st.rerun()
+
         st.caption("💡 관리자 테스트 계정: `admin` (또는 `admin@electro.ai`) / PW: `admin1234!`")
 
-    with tab_s:
-        st.markdown("**1. 계정 정보 설정**")
+    # 2) 회원가입 화면 (완료 시 자동으로 로그인 화면으로 이동)
+    elif ap == "signup":
+        if st.button("⬅️ 로그인 화면으로 돌아가기"):
+            st.session_state.auth_page = "login"
+            st.rerun()
+
+        st.subheader(f"📝 {t('signup_tab', lang)}")
         su_id = st.text_input("사용할 아이디 (영문·숫자·_ 조합 4~20자)", placeholder="예: electro_kim", key="su_id")
         su_name = st.text_input("이름 (실명)", key="su_name")
         su_pw = st.text_input("비밀번호 (영문 + 숫자 + 특수문자 포함 8자 이상)", type="password", key="su_pw")
         su_pw2 = st.text_input("비밀번호 확인", type="password", key="su_pw2")
 
         st.divider()
-        st.markdown("**2. 본인인증 선택 (필수)**")
+        st.markdown("**본인인증 선택 (필수)**")
         auth_choice = st.radio("인증 수단", ["📱 휴대폰 문자 인증 (6자리)", "📧 이메일 인증 (6자리)"], horizontal=True)
         auth_method = "phone" if "휴대폰" in auth_choice else "email"
 
@@ -141,7 +169,6 @@ if st.session_state.user is None:
                 smtp_user = st.text_input("보내는 Gmail/네이버 이메일")
                 smtp_pass = st.text_input("앱 비밀번호 (App Password)", type="password")
 
-        # 대상이 바뀌면 인증 상태 초기화
         if auth_target != st.session_state.otp_target or auth_method != st.session_state.otp_method:
             st.session_state.otp_sent = False
             st.session_state.otp_verified = False
@@ -176,7 +203,7 @@ if st.session_state.user is None:
                     st.error(v_msg)
 
         if st.session_state.otp_verified:
-            st.success("✅ 6자리 본인인증이 완료되었습니다! 아래 버튼을 눌러 가입을 마쳐주세요.")
+            st.success("✅ 6자리 본인인증이 완료되었습니다! 아래 버튼을 누르면 가입이 완료됩니다.")
 
         if st.button("✅ 최종 회원가입 완료", type="primary", width="stretch", disabled=(not st.session_state.otp_verified)):
             if su_pw != su_pw2:
@@ -187,27 +214,50 @@ if st.session_state.user is None:
                     st.session_state.otp_sent = False
                     st.session_state.otp_verified = False
                     st.session_state.otp_demo_code = None
-                    st.success(msg)
+                    st.session_state.prefill_id = su_id.strip()
+                    st.session_state.auth_flash = msg
+                    st.session_state.auth_page = "login"
+                    st.rerun()
                 else:
                     st.error(msg)
 
-    with tab_fi:
+    # 3) 아이디 찾기 화면
+    elif ap == "find_id":
+        if st.button("⬅️ 로그인 화면으로 돌아가기"):
+            st.session_state.auth_page = "login"
+            st.rerun()
+
+        st.subheader(f"🔎 {t('find_id_tab', lang)}")
         fi_name = st.text_input("가입 시 등록한 이름", key="fi_n")
         fi_hint = st.text_input("인증했던 휴대폰 번호 또는 이메일", key="fi_h")
-        if st.button("내 아이디 찾기", width="stretch"):
+        if st.button("내 아이디 찾기", type="primary", width="stretch"):
             ok, msg = find_user_id(fi_name, fi_hint)
             st.success(msg) if ok else st.error(msg)
 
-    with tab_fp:
+    # 4) 비밀번호 재설정 화면
+    elif ap == "find_pw":
+        if st.button("⬅️ 로그인 화면으로 돌아가기"):
+            st.session_state.auth_page = "login"
+            st.rerun()
+
+        st.subheader(f"🔑 {t('find_pw_tab', lang)}")
         fp_id = st.text_input("가입 아이디 (또는 휴대폰/이메일)", key="fp_id")
         fp_name = st.text_input("가입자 이름", key="fp_n")
         fp_new = st.text_input("새 비밀번호 (영문+숫자+특수문자 8자 이상)", type="password", key="fp_pw")
-        if st.button("비밀번호 재설정", width="stretch"):
+        if st.button("비밀번호 재설정", type="primary", width="stretch"):
             ok, msg = reset_user_password(fp_id, fp_name, fp_new)
-            st.success(msg) if ok else st.error(msg)
+            if ok:
+                st.session_state.auth_flash = msg
+                st.session_state.auth_page = "login"
+                st.rerun()
+            else:
+                st.error(msg)
+
     st.stop()
 
-# 로그인 상태 상단 바
+# ==========================================
+# 로그인 완료 후: 상단 사용자 바 & 메인 화면 (회원가입 UI 없음)
+# ==========================================
 user = st.session_state.user
 u_c1, u_c2, u_c3 = st.columns([2.2, 1.8, 1])
 u_c1.caption(f"👤 **{user['name']}** (`{user.get('username') or ''}`)")
@@ -220,9 +270,9 @@ if user["role"] == "admin":
 if u_c3.button("로그아웃", width="stretch"):
     st.session_state.user = None
     st.session_state.view_mode = "app"
+    st.session_state.auth_page = "login"
     st.rerun()
 
-# 관리자 웹브라우저 화면 (고객 문의 관리)
 if user["role"] == "admin" and st.session_state.view_mode == "admin":
     st.subheader("🖥️ 관리자 웹브라우저 — 고객 문의 내역")
     if st.button("🔄 새로고침"):
@@ -244,9 +294,6 @@ if user["role"] == "admin" and st.session_state.view_mode == "admin":
                     st.rerun()
     st.stop()
 
-# ==========================================
-# 1~5단계 메인 앱
-# ==========================================
 with st.expander("🔑 AI 도면 인식 키 (Gemini API 키 — 미입력 시 시뮬레이션 모드)"):
     api_key = st.text_input("Gemini API Key", value=os.environ.get("GEMINI_API_KEY", ""), type="password")
 

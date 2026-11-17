@@ -9,7 +9,8 @@ from email.message import EmailMessage
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "electro_app.db")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(BASE_DIR, "electro_app.db")
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -25,7 +26,9 @@ def _normalize_phone(phone: str) -> str:
 def _hash_password(password: str, salt: Optional[str] = None) -> str:
     if salt is None:
         salt = os.urandom(16).hex()
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100000)
+    dk = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 100000
+    )
     return f"{salt}${dk.hex()}"
 
 
@@ -72,12 +75,13 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
-    # 기존 DB 파일 자동 마이그레이션 (username 컬럼 추가)
     cur.execute("PRAGMA table_info(users)")
     cols = [r["name"] for r in cur.fetchall()]
     if "username" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN username TEXT")
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)"
+        )
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS verification_codes (
@@ -103,16 +107,22 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
-    # 기본 관리자 계정 보장 (ID: admin / PW: admin1234!)
     cur.execute("SELECT id FROM users WHERE email = ?", ("admin@electro.ai",))
     admin_row = cur.fetchone()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if not admin_row:
         cur.execute(
-            "INSERT INTO users (username, name, phone, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("admin", "관리자", "01000000000", "admin@electro.ai", _hash_password("admin1234!"), "admin", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            """INSERT INTO users
+               (username, name, phone, email, password_hash, role, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("admin", "관리자", "01000000000", "admin@electro.ai",
+             _hash_password("admin1234!"), "admin", now_str),
         )
     else:
-        cur.execute("UPDATE users SET username = 'admin' WHERE id = ? AND username IS NULL", (admin_row["id"],))
+        cur.execute(
+            "UPDATE users SET username = 'admin' WHERE id = ? AND username IS NULL",
+            (admin_row["id"],),
+        )
     conn.commit()
     conn.close()
 
@@ -125,9 +135,6 @@ def send_otp_code(
     smtp_user: str = "",
     smtp_pass: str = "",
 ) -> tuple[bool, Optional[str], str]:
-    """
-    6자리 인증번호 생성 및 발송 (이메일 SMTP 실제 발송 지원, 미설정 시 테스트 모의 발송)
-    """
     if method == "phone":
         target = _normalize_phone(raw_target)
         if not re.match(r"^01[0-9]{8,9}$", target):
@@ -137,48 +144,55 @@ def send_otp_code(
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", target):
             return False, None, "올바른 이메일 주소를 입력해 주세요."
 
-    # 이미 가입된 연락처인지 확인
     conn = _get_conn()
     cur = conn.cursor()
     col = "phone" if method == "phone" else "email"
     cur.execute(f"SELECT id FROM users WHERE {col} = ?", (target,))
     if cur.fetchone():
         conn.close()
-        return False, None, f"이미 가입되어 있는 {'휴대폰 번호' if method == 'phone' else '이메일'}입니다."
+        kind_err = "휴대폰 번호" if method == "phone" else "이메일"
+        return False, None, f"이미 가입되어 있는 {kind_err}입니다."
 
     code = f"{secrets.randbelow(1000000):06d}"
     now = datetime.now()
     expires = (now + timedelta(minutes=3)).strftime("%Y-%m-%d %H:%M:%S")
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(
-        "INSERT INTO verification_codes (method, target, code, expires_at, verified, created_at) VALUES (?, ?, ?, ?, 0, ?)",
-        (method, target, code, expires, now.strftime("%Y-%m-%d %H:%M:%S")),
+        """INSERT INTO verification_codes
+           (method, target, code, expires_at, verified, created_at)
+           VALUES (?, ?, ?, ?, 0, ?)""",
+        (method, target, code, expires, now_str),
     )
     conn.commit()
     conn.close()
 
-    # 이메일 + SMTP 정보가 설정된 경우 실제 이메일 발송
     if method == "email" and smtp_user.strip() and smtp_pass.strip():
         try:
             msg = EmailMessage()
             msg["Subject"] = "[홈전기 AI 설계사] 회원가입 본인인증 번호 (6자리)"
             msg["From"] = smtp_user.strip()
             msg["To"] = target
-            msg.set_content(f"안녕하세요.\n\n회원가입 본인인증 번호 6자리는 [{code}] 입니다.\n3분 이내에 입력해 주세요.")
-            with smtplib.SMTP(smtp_host.strip(), int(smtp_port), timeout=10) as server:
-                server.starttls()
-                server.login(smtp_user.strip(), smtp_pass.strip())
-                server.send_message(msg)
-            return True, None, f"📧 {target} 주소로 인증번호 6자리를 실제 발송했습니다! (메일함을 확인하세요)"
+            msg.set_content(
+                f"안녕하세요.\n\n회원가입 본인인증 번호 6자리는 [{code}] 입니다.\n3분 이내에 입력해 주세요."
+            )
+            with smtplib.SMTP(smtp_host.strip(), int(smtp_port), timeout=10) as srv:
+                srv.starttls()
+                srv.login(smtp_user.strip(), smtp_pass.strip())
+                srv.send_message(msg)
+            return True, None, f"📧 {target} 주소로 인증번호 6자리를 실제 발송했습니다!"
         except Exception as e:
-            return False, None, f"이메일 발송 실패(SMTP 설정을 확인하세요): {e}"
+            return False, None, f"이메일 발송 실패: {e}"
 
-    # SMS 또는 SMTP 미설정 시 테스트 발송 안내
     label = "문자(SMS)" if method == "phone" else "이메일"
-    return True, code, f"[테스트 발송 모드] 실제 {label} API 연동 전 테스트를 위해 6자리 인증번호가 생성되었습니다."
+    return True, code, f"[테스트 발송 모드] {label} 6자리 인증번호가 생성되었습니다."
 
 
 def verify_otp_code(method: str, raw_target: str, input_code: str) -> tuple[bool, str]:
-    target = _normalize_phone(raw_target) if method == "phone" else (raw_target or "").strip().lower()
+    target = (
+        _normalize_phone(raw_target)
+        if method == "phone"
+        else (raw_target or "").strip().lower()
+    )
     code_in = (input_code or "").strip()
     if not re.match(r"^[0-9]{6}$", code_in):
         return False, "인증번호 숫자 6자리를 정확히 입력해 주세요."
@@ -186,7 +200,9 @@ def verify_otp_code(method: str, raw_target: str, input_code: str) -> tuple[bool
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT * FROM verification_codes WHERE method = ? AND target = ? ORDER BY id DESC LIMIT 1",
+        """SELECT * FROM verification_codes
+           WHERE method = ? AND target = ?
+           ORDER BY id DESC LIMIT 1""",
         (method, target),
     )
     row = cur.fetchone()
@@ -229,15 +245,26 @@ def register_user(
     if not p_ok:
         return False, p_msg
 
-    norm_target = _normalize_phone(auth_target) if auth_method == "phone" else (auth_target or "").strip().lower()
-    phone_val = norm_target if auth_method == "phone" else (_normalize_phone(extra_phone) or None)
-    email_val = norm_target if auth_method == "email" else ((extra_email or "").strip().lower() or None)
+    norm_target = (
+        _normalize_phone(auth_target)
+        if auth_method == "phone"
+        else (auth_target or "").strip().lower()
+    )
+    phone_val = (
+        norm_target if auth_method == "phone" else (_normalize_phone(extra_phone) or None)
+    )
+    email_val = (
+        norm_target
+        if auth_method == "email"
+        else ((extra_email or "").strip().lower() or None)
+    )
 
     conn = _get_conn()
     cur = conn.cursor()
-    # 서버 DB에서 본인인증 완료 여부 최종 검증
     cur.execute(
-        "SELECT verified FROM verification_codes WHERE method = ? AND target = ? ORDER BY id DESC LIMIT 1",
+        """SELECT verified FROM verification_codes
+           WHERE method = ? AND target = ?
+           ORDER BY id DESC LIMIT 1""",
         (auth_method, norm_target),
     )
     vrow = cur.fetchone()
@@ -245,10 +272,20 @@ def register_user(
         conn.close()
         return False, "휴대폰 또는 이메일 6자리 본인인증을 먼저 완료해 주세요."
 
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         cur.execute(
-            "INSERT INTO users (username, name, phone, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, 'user', ?)",
-            (username.strip(), name, phone_val, email_val, _hash_password(password), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            """INSERT INTO users
+               (username, name, phone, email, password_hash, role, created_at)
+               VALUES (?, ?, ?, ?, ?, 'user', ?)""",
+            (
+                username.strip(),
+                name,
+                phone_val,
+                email_val,
+                _hash_password(password),
+                now_str,
+            ),
         )
         conn.commit()
         return True, f"🎉 [{username.strip()}]님 회원가입이 완료되었습니다! 이제 로그인해 주세요."
@@ -258,7 +295,9 @@ def register_user(
         conn.close()
 
 
-def login_user(login_id: str, password: str) -> tuple[bool, Optional[Dict[str, Any]], str]:
+def login_user(
+    login_id: str, password: str
+) -> tuple[bool, Optional[Dict[str, Any]], str]:
     raw_id = (login_id or "").strip()
     norm_phone = _normalize_phone(raw_id)
     norm_email = raw_id.lower()
@@ -269,7 +308,10 @@ def login_user(login_id: str, password: str) -> tuple[bool, Optional[Dict[str, A
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT * FROM users WHERE username = ? OR (email = ? AND email IS NOT NULL) OR (phone = ? AND phone IS NOT NULL)",
+        """SELECT * FROM users
+           WHERE username = ?
+              OR (email = ? AND email IS NOT NULL)
+              OR (phone = ? AND phone IS NOT NULL)""",
         (raw_id, norm_email, norm_phone),
     )
     row = cur.fetchone()
@@ -291,7 +333,10 @@ def find_user_id(name: str, contact_hint: str) -> tuple[bool, str]:
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT username, phone, email FROM users WHERE name = ? AND ((email = ? AND email IS NOT NULL) OR (phone = ? AND phone IS NOT NULL))",
+        """SELECT username, phone, email FROM users
+           WHERE name = ?
+             AND ((email = ? AND email IS NOT NULL)
+               OR (phone = ? AND phone IS NOT NULL))""",
         (name, norm_email, norm_phone),
     )
     row = cur.fetchone()
@@ -320,7 +365,11 @@ def reset_user_password(login_id: str, name: str, new_password: str) -> tuple[bo
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id FROM users WHERE name = ? AND (username = ? OR (email = ? AND email IS NOT NULL) OR (phone = ? AND phone IS NOT NULL))",
+        """SELECT id FROM users
+           WHERE name = ?
+             AND (username = ?
+               OR (email = ? AND email IS NOT NULL)
+               OR (phone = ? AND phone IS NOT NULL))""",
         (name, raw_id, norm_email, norm_phone),
     )
     row = cur.fetchone()
@@ -328,20 +377,35 @@ def reset_user_password(login_id: str, name: str, new_password: str) -> tuple[bo
         conn.close()
         return False, "아이디와 이름이 일치하는 회원이 없습니다."
 
-    cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (_hash_password(new_password), row["id"]))
+    cur.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        (_hash_password(new_password), row["id"]),
+    )
     conn.commit()
     conn.close()
     return True, "비밀번호가 성공적으로 변경되었습니다. 새 비밀번호로 로그인하세요."
 
 
-def create_inquiry(user_login_id: str, author_name: str, contact: str, title: str, message: str) -> tuple[bool, str]:
+def create_inquiry(
+    user_login_id: str, author_name: str, contact: str, title: str, message: str
+) -> tuple[bool, str]:
     if not (author_name.strip() and contact.strip() and title.strip() and message.strip()):
         return False, "이름, 연락처, 제목, 문의 내용을 모두 입력해 주세요."
     conn = _get_conn()
     cur = conn.cursor()
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur.execute(
-        "INSERT INTO inquiries (user_login_id, author_name, contact, title, message, status, created_at) VALUES (?, ?, ?, ?, ?, '접수됨', ?)",
-        (user_login_id, author_name.strip(), contact.strip(), title.strip(), message.strip(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        """INSERT INTO inquiries
+           (user_login_id, author_name, contact, title, message, status, created_at)
+           VALUES (?, ?, ?, ?, ?, '접수됨', ?)""",
+        (
+            user_login_id,
+            author_name.strip(),
+            contact.strip(),
+            title.strip(),
+            message.strip(),
+            now_str,
+        ),
     )
     conn.commit()
     conn.close()
@@ -360,6 +424,9 @@ def get_all_inquiries() -> List[Dict[str, Any]]:
 def reply_inquiry(inq_id: int, reply_text: str):
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("UPDATE inquiries SET admin_reply = ?, status = '답변완료' WHERE id = ?", ((reply_text or "").strip(), inq_id))
+    cur.execute(
+        "UPDATE inquiries SET admin_reply = ?, status = '답변완료' WHERE id = ?",
+        ((reply_text or "").strip(), inq_id),
+    )
     conn.commit()
     conn.close()
